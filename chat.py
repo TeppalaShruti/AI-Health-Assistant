@@ -5,7 +5,7 @@ from sentence_transformers import SentenceTransformer, util
 from googletrans import Translator
 
 # Load your data
-df = pd.read_csv(r'C:\Users\laiul\OneDrive\Desktop\AI-chatbot\dataset - Sheet1.csv')  # Replace with your dataset path
+df = pd.read_csv('dataset - Sheet1.csv')  # Replace with your dataset path
 
 # Initialize the SentenceTransformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
