@@ -4,101 +4,129 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer, util
 from googletrans import Translator
 
-# Load your data
-df = pd.read_csv('dataset - Sheet1.csv')  # Replace with your dataset path
+# ======================
+# CONFIGURATION & SETUP
+# ======================
 
-# Initialize the SentenceTransformer model
-model = SentenceTransformer('all-MiniLM-L6-v2')
+st.set_page_config(page_title="AI Health Assistant", page_icon="🤖", layout="centered")
 
-# Define medical keywords for fallback
+st.markdown("""
+<style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button {
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+    .response-box {
+        background-color: white;
+        padding: 18px;
+        border-radius: 12px;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        margin-top: 15px;
+        font-size: 16px;
+        line-height: 1.5;
+    }
+    footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+# 🔴 LOAD YOUR ACTUAL DATASET FILE NAME HERE
+try:
+    df = pd.read_csv('dataset - Sheet1.csv')  # ✅ Updated to your filename
+    if 'disease' not in df.columns or 'cure' not in df.columns:
+        st.error("❌ CSV must contain 'disease' and 'cure' columns.")
+        st.stop()
+except FileNotFoundError:
+    st.error("❌ File 'dataset - Sheet1.csv' not found in the current directory.")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ Error loading dataset: {e}")
+    st.stop()
+
+@st.cache_resource
+def load_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+model = load_model()
+translator = Translator()
+
+# ======================
+# HELPER FUNCTIONS
+# ======================
+
+health_tips = {
+    "sleep": [
+        "Try to get at least 7–8 hours of sleep each night.",
+        "Establish a regular sleep routine to improve sleep quality.",
+        "Avoid screens 1 hour before bed to help your mind relax."
+    ],
+    "energy": [
+        "Eat balanced meals with protein, healthy fats, and complex carbs.",
+        "Exercise for 30 minutes daily to boost natural energy.",
+        "Stay hydrated—dehydration causes fatigue."
+    ],
+    "stress": [
+        "Practice 5-minute deep breathing or mindfulness daily.",
+        "Take short walks in nature to reduce anxiety.",
+        "Write down your thoughts to clear mental clutter."
+    ],
+    "general": [
+        "Drink at least 8 glasses of water per day.",
+        "Eat more fruits, vegetables, and whole grains.",
+        "Limit processed sugar and caffeine intake."
+    ]
+}
+
 medical_keywords = {
     "fever": "It sounds like you may have a fever. Stay hydrated and consider seeing a doctor if symptoms persist.",
     "cough": "A persistent cough might be due to an infection or allergy. Try warm fluids and rest.",
     "headache": "Headaches can have many causes, including stress and dehydration. Consider resting and drinking water.",
-    "cold": "Common colds usually go away on their own. Stay warm, drink fluids, and get rest.",
+    "cold": "Common colds usually go away on their own. Stay warm, drink fluids, and get rest."
 }
 
-# List of health tips categorized by keywords
-health_tips = {
-    "sleep": [
-        "Try to get at least 7-8 hours of sleep each night.",
-        "Establish a regular sleep routine to improve sleep quality.",
-        "Avoid screens before bed to help your mind relax.",
-    ],
-    "energy": [
-        "Make sure you're eating a balanced diet to maintain energy.",
-        "Exercise regularly to boost your energy levels.",
-        "Stay hydrated throughout the day to avoid fatigue.",
-    ],
-    "stress": [
-        "Take short breaks throughout the day to reduce stress.",
-        "Practice mindfulness or meditation to help manage stress.",
-        "Engage in physical activity to reduce anxiety and stress.",
-    ],
-    "general": [
-        "Drink plenty of water throughout the day.",
-        "Get at least 30 minutes of exercise every day.",
-        "Eat a balanced diet rich in fruits and vegetables.",
-    ],
-}
-
-# Function to get personalized health tip
 def get_personalized_health_tip(user_input):
-    # Convert input to lowercase for easier matching
     user_input_lower = user_input.lower()
-
-    # Check for specific keywords in the user input
-    if "tired" in user_input_lower or "fatigue" in user_input_lower:
+    if any(word in user_input_lower for word in ["tired", "fatigue", "low energy"]):
         return random.choice(health_tips["energy"])
-    elif "sleep" in user_input_lower or "rest" in user_input_lower:
+    elif any(word in user_input_lower for word in ["sleep", "rest", "insomnia"]):
         return random.choice(health_tips["sleep"])
-    elif "stress" in user_input_lower or "anxious" in user_input_lower:
+    elif any(word in user_input_lower for word in ["stress", "anxious", "worried"]):
         return random.choice(health_tips["stress"])
     else:
-        # Default to a general health tip if no specific keywords match
         return random.choice(health_tips["general"])
 
-# Function to find the best cure based on similarity
 def find_best_cure(user_input):
-    user_input_embedding = model.encode(user_input, convert_to_tensor=True)
-    disease_embeddings = model.encode(df['disease'].tolist(), convert_to_tensor=True)
-    
-    similarities = util.pytorch_cos_sim(user_input_embedding, disease_embeddings)[0]
-    best_match_idx = similarities.argmax().item()
-    best_match_score = similarities[best_match_idx].item()
-    
-    # Define a similarity threshold for valid matches
-    SIMILARITY_THRESHOLD = 0.5  # Adjust as needed
-    
-    if best_match_score < SIMILARITY_THRESHOLD:
-        # Check for keywords in user input
+    try:
+        user_embedding = model.encode(user_input, convert_to_tensor=True)
+        disease_embeddings = model.encode(df['disease'].tolist(), convert_to_tensor=True)
+        similarities = util.pytorch_cos_sim(user_embedding, disease_embeddings)[0]
+        best_idx = similarities.argmax().item()
+        best_score = similarities[best_idx].item()
+
+        SIMILARITY_THRESHOLD = 0.4
+        if best_score >= SIMILARITY_THRESHOLD:
+            return df.iloc[best_idx]['cure']
+
         for keyword, response in medical_keywords.items():
             if keyword in user_input.lower():
                 return response
-        
-        # Default fallback response if no keywords match
+
         return "I'm sorry, I don't have enough information on this. Please consult a healthcare professional."
-    
-    return df.iloc[best_match_idx]['cure']
+    except Exception as e:
+        return "An error occurred while analyzing your symptoms. Please try again."
 
-# Function to translate text
 def translate_text(text, dest_language='en'):
-    return translator.translate(text, dest=dest_language).text
+    try:
+        if dest_language == 'en':
+            return text
+        result = translator.translate(text, dest=dest_language)
+        return result.text if result.text else text
+    except Exception:
+        return text  # Fallback to original
 
-# Initialize translator
-translator = Translator()
-
-# Streamlit UI
-st.title("Medical Chatbot 🤖")
-user_input = st.text_input("Ask a question:")
-
-# Language selection (user chooses from the updated list of languages)
-language_choice = st.selectbox("Select Language", [
-    "English", "Hindi", "Gujarati", "Korean", "Turkish",
-    "German", "French", "Arabic", "Urdu", "Tamil", "Telugu", "Chinese", "Japanese"
-])
-
-# Language codes based on the user selection
 language_codes = {
     "English": "en",
     "Hindi": "hi",
@@ -111,23 +139,44 @@ language_codes = {
     "Urdu": "ur",
     "Tamil": "ta",
     "Telugu": "te",
-    "Chinese": "zh-CN",  # Simplified Chinese
+    "Chinese": "zh-CN",
     "Japanese": "ja",
 }
 
-# Button for response
-if st.button("Get Response"):
-    if user_input:
-        response = find_best_cure(user_input)
-        # Translate the response based on the selected language
-        translated_response = translate_text(response, dest_language=language_codes[language_choice])
-        st.write(f"**My Suggestion is:** {translated_response}")
-        st.write("*Please note, the translation is provided by AI and might not be perfect.*")
+# ======================
+# STREAMLIT UI
+# ======================
 
-# Add a button to get a personalized health tip
-if st.button("Get a Personalized Health Tip"):
-    if user_input:
-        personalized_tip = get_personalized_health_tip(user_input)
-        translated_tip = translate_text(personalized_tip, dest_language=language_codes[language_choice])
-        st.write(f"**Health Tip:** {translated_tip}")
-        st.write("*Please note, the translation is provided by AI and might not be perfect.*")
+st.title("🤖 AI Health Assistant")
+st.caption("Get personalized health advice in your language")
+
+col1, col2 = st.columns([3, 1])
+with col1:
+    user_input = st.text_input(
+        "Describe your symptom or health concern:",
+        placeholder="e.g., I have a headache and fever"
+    )
+with col2:
+    language_choice = st.selectbox("🌐 Language", list(language_codes.keys()), index=0)
+
+col_btn1, col_btn2 = st.columns(2)
+with col_btn1:
+    get_response = st.button("💡 Get Medical Advice", use_container_width=True)
+with col_btn2:
+    get_tip = st.button("🌱 Get Health Tip", use_container_width=True)
+
+if get_response and user_input.strip():
+    with st.spinner("Analyzing your symptoms..."):
+        response = find_best_cure(user_input.strip())
+        translated = translate_text(response, dest_language=language_codes[language_choice])
+    st.markdown(f'<div class="response-box"><strong>🩺 Medical Suggestion:</strong><br>{translated}</div>', unsafe_allow_html=True)
+    st.info("⚠️ *This is not a substitute for professional medical advice. Consult a doctor for serious concerns.*")
+
+if get_tip and user_input.strip():
+    with st.spinner("Generating tip..."):
+        tip = get_personalized_health_tip(user_input.strip())
+        translated_tip = translate_text(tip, dest_language=language_codes[language_choice])
+    st.markdown(f'<div class="response-box"><strong>🌿 Health Tip:</strong><br>{translated_tip}</div>', unsafe_allow_html=True)
+
+st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
+st.caption("Powered by Sentence Transformers • Multilingual support via Google Translate")
