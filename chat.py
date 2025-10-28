@@ -5,7 +5,6 @@ import pandas as pd
 import random
 from sentence_transformers import SentenceTransformer, util
 from googletrans import Translator
-import os
 
 # ======================
 # DATABASE SETUP
@@ -63,6 +62,10 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = ""
+if "last_user_input" not in st.session_state:
+    st.session_state.last_user_input = ""
+if "show_health_tip" not in st.session_state:
+    st.session_state.show_health_tip = False
 
 # ======================
 # LOGIN PAGE
@@ -137,7 +140,7 @@ def show_login_page():
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ======================
-# MAIN APP
+# MAIN APP — FIXED HEALTH TIP LOGIC
 # ======================
 def show_main_app():
     st.set_page_config(page_title="AI Health Assistant", page_icon="🤖", layout="centered")
@@ -145,15 +148,15 @@ def show_main_app():
     <style>
         .main { background-color: #0f0013; color: white; }
         .top-bar { display: flex; justify-content: flex-end; padding: 15px; }
-        .header { text-align: center; margin: 30px 0; }
-        .header h1 { font-size: 2.4rem; background: linear-gradient(90deg, #2ecc71, #3498db); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .action-buttons { display: flex; justify-content: center; gap: 20px; margin: 20px 0; }
+        .header { text-align: center; margin: 20px 0; }
+        .header h1 { font-size: 2.2rem; color: #2ecc71; }
+        .input-section { margin: 20px 0; }
         .stButton>button {
             background: #2ecc71;
             color: white;
             border: none;
             border-radius: 30px;
-            padding: 10px 24px;
+            padding: 10px 20px;
             font-weight: 600;
             box-shadow: 0 4px 10px rgba(46,204,113,0.3);
         }
@@ -170,9 +173,20 @@ def show_main_app():
             border-left: 4px solid #2ecc71;
             padding: 20px;
             border-radius: 12px;
-            margin-top: 25px;
+            margin-top: 20px;
             font-size: 16px;
             line-height: 1.6;
+        }
+        .tip-button {
+            margin-top: 15px;
+            text-align: center;
+        }
+        .tip-button button {
+            background: transparent;
+            color: #2ecc71;
+            border: 1px solid #2ecc71;
+            border-radius: 20px;
+            padding: 6px 16px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -182,14 +196,16 @@ def show_main_app():
     if st.button("Logout", key="logout_btn"):
         st.session_state.logged_in = False
         st.session_state.username = ""
+        st.session_state.last_user_input = ""
+        st.session_state.show_health_tip = False
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Header
     st.markdown(f'''
     <div class="header">
-        <h1>AI Health Assistant</h1>
-        <p style="color:#bdc3c7;">Welcome, {st.session_state.username}! Get personalized health advice in your language</p>
+        <h1>🤖 AI Health Assistant</h1>
+        <p style="color:#bdc3c7;">Hi {st.session_state.username}! Describe your symptom below.</p>
     </div>
     ''', unsafe_allow_html=True)
 
@@ -198,7 +214,7 @@ def show_main_app():
         df = pd.read_csv('dataset - Sheet1.csv')
         assert 'disease' in df.columns and 'cure' in df.columns
     except Exception:
-        st.error("❌ Dataset missing. Ensure 'dataset - Sheet1.csv' exists with 'disease' and 'cure' columns.")
+        st.error("❌ Dataset missing. Ensure 'dataset - Sheet1.csv' exists.")
         return
 
     @st.cache_resource
@@ -252,27 +268,33 @@ def show_main_app():
         except:
             return text
 
-    # UI
-    col1, col2 = st.columns(2)
-    with col1:
-        get_advice = st.button("💡 Get Medical Advice", use_container_width=True)
-    with col2:
-        get_tip = st.button("🌱 Get Health Tip", use_container_width=True)
+    # === MAIN INPUT & FLOW ===
+    user_input = st.text_input(
+        "",
+        placeholder="e.g., I have a headache and feel tired...",
+        value=st.session_state.last_user_input
+    )
 
-    user_input = st.text_input("", placeholder="Describe your symptom or health concern...")
+    # Get Medical Advice
+    if st.button("📤 Get Medical Advice", use_container_width=True):
+        if user_input.strip():
+            st.session_state.last_user_input = user_input.strip()
+            st.session_state.show_health_tip = True
+            with st.spinner("Analyzing your symptoms..."):
+                resp = find_best_cure(user_input.strip())
+                trans = translate_text(resp, "en")
+            st.markdown(f'<div class="response-box"><strong>🩺 Medical Advice:</strong><br>{trans}</div>', unsafe_allow_html=True)
+            st.info("⚠️ *This is not a substitute for professional medical advice.*")
+        else:
+            st.warning("Please describe your symptom first.")
 
-    if get_advice and user_input.strip():
-        with st.spinner("Analyzing your symptoms..."):
-            resp = find_best_cure(user_input.strip())
-            trans = translate_text(resp, "en")
-        st.markdown(f'<div class="response-box"><strong>🩺 Medical Suggestion:</strong><br>{trans}</div>', unsafe_allow_html=True)
-        st.info("⚠️ *This is not a substitute for professional medical advice.*")
-
-    if get_tip and user_input.strip():
-        with st.spinner("Generating tip..."):
-            tip = get_personalized_health_tip(user_input.strip())
-            trans_tip = translate_text(tip, "en")
-        st.markdown(f'<div class="response-box"><strong>🌿 Health Tip:</strong><br>{trans_tip}</div>', unsafe_allow_html=True)
+    # Always show "Get Health Tip" if flag is True
+    if st.session_state.show_health_tip:
+        if st.button("🌱 Get Health Tip", use_container_width=True):
+            with st.spinner("Generating wellness tip..."):
+                tip = get_personalized_health_tip(st.session_state.last_user_input)
+                trans_tip = translate_text(tip, "en")
+            st.markdown(f'<div class="response-box"><strong>🌿 Wellness Tip:</strong><br>{trans_tip}</div>', unsafe_allow_html=True)
 
 # ======================
 # ROUTER
