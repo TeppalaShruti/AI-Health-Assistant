@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import sqlite3
 import bcrypt
@@ -19,38 +20,51 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
+            password_hash BLOB NOT NULL
         )
     """)
     conn.commit()
     conn.close()
 
-def hash_password(password):
+def hash_password(password: str) -> bytes:
+    """Return bcrypt hashed password (bytes)."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-def verify_password(password, hashed):
+def verify_password(password: str, hashed) -> bool:
+    """Verify a password against a stored hash (supports bytes or memoryview)."""
+    if isinstance(hashed, memoryview):
+        hashed = hashed.tobytes()
+    if isinstance(hashed, str):
+        # unlikely, but convert if stored as str
+        hashed = hashed.encode('latin1')
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-def register_user(username, email, password):
+def register_user(username: str, email: str, password: str) -> bool:
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-                  (username, email, hash_password(password)))
+        pw_hash = hash_password(password)
+        # store as BLOB
+        c.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            (username, email, sqlite3.Binary(pw_hash))
+        )
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
         return False
+    except Exception:
+        return False
 
-def authenticate_user(username, password):
+def authenticate_user(username: str, password: str) -> bool:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
     result = c.fetchone()
     conn.close()
-    if result and verify_password(password, result[0]):
-        return True
+    if result and result[0] is not None:
+        return verify_password(password, result[0])
     return False
 
 init_db()
@@ -135,7 +149,7 @@ def show_login_page():
                 elif register_user(new_user, email, pwd1):
                     st.success("Account created! Please log in.")
                 else:
-                    st.error("Username/email already exists")
+                    st.error("Username/email already exists or an error occurred.")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -209,16 +223,27 @@ def show_main_app():
     </div>
     ''', unsafe_allow_html=True)
 
-    # Load dataset
+    # Load dataset (use local project copy)
+    BASE_DIR = os.path.dirname(__file__)
+    df_path = os.path.join(BASE_DIR, 'dataset - Sheet1.csv')
+
+    if not os.path.exists(df_path):
+        st.error(f"❌ Dataset missing. Please put 'dataset - Sheet1.csv' in the project folder: {BASE_DIR}")
+        return
+
     try:
-        df = pd.read_csv('dataset - Sheet1.csv')
-        assert 'disease' in df.columns and 'cure' in df.columns
-    except Exception:
-        st.error("❌ Dataset missing. Ensure 'dataset - Sheet1.csv' exists.")
+        df = pd.read_csv(df_path)
+        # basic validation
+        if 'disease' not in df.columns or 'cure' not in df.columns:
+            st.error("Dataset found but missing required columns 'disease' and/or 'cure'. Please fix the CSV.")
+            return
+    except Exception as e:
+        st.error(f"Error loading dataset: {e}")
         return
 
     @st.cache_resource
     def load_model():
+        # small model for embeddings — quick and works well for demos
         return SentenceTransformer('all-MiniLM-L6-v2')
 
     model = load_model()
@@ -226,27 +251,30 @@ def show_main_app():
 
     # Helper functions
     health_tips = {
-        "sleep": ["Try to get at least 7–8 hours of sleep each night.", "Establish a regular sleep routine...", "Avoid screens 1 hour before bed..."],
-        "energy": ["Eat balanced meals...", "Exercise for 30 minutes daily...", "Stay hydrated..."],
-        "stress": ["Practice 5-minute deep breathing...", "Take short walks in nature...", "Write down your thoughts..."],
-        "general": ["Drink at least 8 glasses of water...", "Eat more fruits and vegetables...", "Limit processed sugar..."]
+        "sleep": ["Try to get at least 7–8 hours of sleep each night.", "Establish a regular sleep routine.", "Avoid screens 1 hour before bed."],
+        "energy": ["Eat balanced meals with complex carbs and protein.", "Exercise for 30 minutes daily.", "Stay hydrated and take short walks."],
+        "stress": ["Practice 5-minute deep breathing exercises.", "Take short walks in nature.", "Write down your thoughts to clear your mind."],
+        "general": ["Drink at least 8 glasses of water daily.", "Eat more fruits and vegetables.", "Limit processed sugar intake."]
     }
 
     medical_keywords = {
         "fever": "It sounds like you may have a fever. Stay hydrated and consider seeing a doctor if symptoms persist.",
-        "cough": "A persistent cough might be due to an infection or allergy. Try warm fluids and rest.",
-        "headache": "Headaches can have many causes, including stress and dehydration. Consider resting and drinking water.",
-        "cold": "Common colds usually go away on their own. Stay warm, drink fluids, and get rest."
+        "cough": "A persistent cough might be due to an infection or allergy. Try warm fluids and rest. Seek medical care if breathing is difficult.",
+        "headache": "Headaches can have many causes, including stress and dehydration. Consider resting and drinking water. See a doctor for severe or recurrent headaches.",
+        "cold": "Common colds usually go away on their own. Stay warm, drink fluids, and rest."
     }
 
-    def get_personalized_health_tip(user_input):
+    def get_personalized_health_tip(user_input: str) -> str:
         u = user_input.lower()
-        if any(w in u for w in ["tired", "fatigue", "low energy"]): return random.choice(health_tips["energy"])
-        if any(w in u for w in ["sleep", "rest", "insomnia"]): return random.choice(health_tips["sleep"])
-        if any(w in u for w in ["stress", "anxious", "worried"]): return random.choice(health_tips["stress"])
+        if any(w in u for w in ["tired", "fatigue", "low energy"]): 
+            return random.choice(health_tips["energy"])
+        if any(w in u for w in ["sleep", "rest", "insomnia"]): 
+            return random.choice(health_tips["sleep"])
+        if any(w in u for w in ["stress", "anxious", "worried"]): 
+            return random.choice(health_tips["stress"])
         return random.choice(health_tips["general"])
 
-    def find_best_cure(user_input):
+    def find_best_cure(user_input: str) -> str:
         try:
             emb = model.encode(user_input, convert_to_tensor=True)
             disease_embs = model.encode(df['disease'].tolist(), convert_to_tensor=True)
@@ -254,18 +282,26 @@ def show_main_app():
             idx = sims.argmax().item()
             score = sims[idx].item()
             if score >= 0.4:
-                return df.iloc[idx]['cure']
+                return str(df.iloc[idx]['cure'])
+            # fallback keyword matching
             for k, v in medical_keywords.items():
                 if k in user_input.lower():
                     return v
             return "I'm sorry, I don't have enough information. Please consult a healthcare professional."
-        except:
-            return "An error occurred. Please try again."
+        except Exception:
+            return "An error occurred while analyzing your input. Please try again."
 
-    def translate_text(text, lang='en'):
+    def translate_text(text: str, lang: str = 'en') -> str:
         try:
-            return translator.translate(text, dest=lang).text if lang != 'en' else text
-        except:
+            # if target is english, return raw text; translator may throw for same-language
+            if not text:
+                return text
+            if lang is None or lang.lower() == 'en':
+                return text
+            res = translator.translate(text, dest=lang)
+            # googletrans may return an object; ensure .text exists
+            return getattr(res, "text", str(res))
+        except Exception:
             return text
 
     # === MAIN INPUT & FLOW ===

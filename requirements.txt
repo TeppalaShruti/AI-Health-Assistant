@@ -1,0 +1,7 @@
+streamlit[no-pyarrow]
+pandas
+sentence-transformers
+torch
+googletrans==4.0.0-rc1
+bcrypt
+# sqlite3 (Assuming this was removed)
